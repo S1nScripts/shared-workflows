@@ -1,0 +1,69 @@
+name: Reusable Release Workflow
+
+on:
+  workflow_call:
+    inputs:
+      is_fivem_script:
+        required: true
+        type: boolean
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Get version and branch name
+        id: get_version_and_branch
+        run: |
+          if ${{ inputs.is_fivem_script }}; then
+            VERSION=$(grep "^version '" fxmanifest.lua | cut -d"'" -f2)
+          else
+            VERSION=$(grep "^version:" version.yml | cut -d' ' -f2)
+          fi
+          BRANCH_NAME=${GITHUB_REF##refs/heads/}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Get commit messages
+        id: get_commit_messages
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            COMMIT_MESSAGES=$(git log --format="- %s [View Commit](https://github.com/${{ github.repository }}/commit/%H)" $LAST_TAG..HEAD)
+          else
+            COMMIT_MESSAGES=$(git log --format="- %s [View Commit](https://github.com/${{ github.repository }}/commit/%H)")
+          fi
+          echo "COMMIT_MESSAGES<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMIT_MESSAGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.get_version_and_branch.outputs.VERSION }}
+          release_name: v${{ steps.get_version_and_branch.outputs.VERSION }}
+          body: |
+            ${{ steps.get_commit_messages.outputs.COMMIT_MESSAGES }}
+          draft: false
+          prerelease: false
+
+      - name: Update version in versions repository
+        if: ${{ inputs.is_fivem_script }}
+        uses: actions/checkout@v2
+        with:
+          repository: 'S1nScripts/versions'
+          token: ${{ secrets.ACTION_TOKEN_ALL_REPO }}
+          path: 'versions'
+      - run: |
+          echo "${{ steps.get_version_and_branch.outputs.VERSION }}" > "versions/${GITHUB_REPOSITORY##*/}"
+          cd versions
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
+          git commit -m "Update version to ${{ steps.get_version_and_branch.outputs.VERSION }}"
+          git push
